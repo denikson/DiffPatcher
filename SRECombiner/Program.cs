@@ -9,80 +9,114 @@ namespace SRESplitter
 {
     internal static class Program
     {
-        private static readonly Dictionary<string, TypeDefinition> corTypes = new Dictionary<string, TypeDefinition>();
+        private static readonly Dictionary<string, TypeDefinition> diffTypes = new Dictionary<string, TypeDefinition>();
 
-        private static readonly Dictionary<string, MethodDefinition> corMethods =
+        private static readonly Dictionary<string, MethodDefinition> diffMethods =
             new Dictionary<string, MethodDefinition>();
 
-        private static readonly Dictionary<string, FieldDefinition> corFields =
+        private static readonly Dictionary<string, FieldDefinition> diffFields =
             new Dictionary<string, FieldDefinition>();
 
         private static FieldReference GetFieldRef(this ModuleDefinition md, FieldReference fr)
         {
-            return corFields.TryGetValue(fr.FullName, out var result) ? result : md.ImportReference(fr);
+            if (fr.DeclaringType is GenericInstanceType git)
+            {
+                var res = GetFieldRef(md, fr.Resolve());
+                var newGit = new GenericInstanceType(res.DeclaringType);
+
+                foreach (var gitGenericArgument in git.GenericArguments)
+                {
+                    newGit.GenericArguments.Add(md.ResolveType(gitGenericArgument));
+                }
+
+                res.DeclaringType = newGit;
+                return res;
+            }
+
+            return diffFields.TryGetValue(fr.FullName, out var result) ? result : md.ImportReference(fr);
         }
 
         private static MethodReference GetMethodRef(this ModuleDefinition md, MethodReference mr)
         {
-            return corMethods.TryGetValue(mr.FullName, out var result) ? result : md.ImportReference(mr);
+            if (mr is GenericInstanceMethod gim)
+            {
+                var newGim = new GenericInstanceMethod(md.GetMethodRef(gim.ElementMethod));
+
+                foreach (var gimGenericArgument in gim.GenericArguments)
+                    newGim.GenericArguments.Add(md.ResolveType(gimGenericArgument));
+
+                return newGim;
+            }
+            else if (mr.DeclaringType is GenericInstanceType git)
+            {
+                var res = GetMethodRef(md, mr.Resolve());
+                var newGit = new GenericInstanceType(res.DeclaringType);
+
+                foreach (var gitGenericArgument in git.GenericArguments)
+                {
+                    newGit.GenericArguments.Add(md.ResolveType(gitGenericArgument));
+                }
+
+                res.DeclaringType = newGit;
+                return res;
+            }
+
+            return diffMethods.TryGetValue(mr.FullName, out var result) ? result : md.ImportReference(mr);
         }
 
         private static void Main(string[] args)
         {
-            using (var mre = AssemblyDefinition.ReadAssembly("Mono.Reflection.Emit.dll"))
-                using (var corlib = AssemblyDefinition.ReadAssembly("mscorlib.dll"))
+            using (var diffDll = AssemblyDefinition.ReadAssembly("mscorlib_diff.dll"))
+                using (var corlibDll = AssemblyDefinition.ReadAssembly("mscorlib.dll"))
                 {
-                    var cor = corlib.MainModule;
+                    var diff = diffDll.MainModule;
+                    var corlib = corlibDll.MainModule;
                     Console.WriteLine("PASS 1: Registering types");
-                    RegisterTypes(cor, null, mre.MainModule.Types);
+                    RegisterTypes(corlib, null, diffDll.MainModule.Types);
 
                     Console.WriteLine("PASS 2: Copying class bodies");
-                    foreach (var corTypePair in corTypes)
+                    foreach (var corTypePair in diffTypes)
                     {
                         var td = corTypePair.Value;
-                        var mreType = mre.MainModule.GetType(td.FullName);
+                        var diffType = diff.GetType(td.FullName);
 
                         Console.WriteLine(td.FullName);
 
-                        if (mreType.BaseType != null)
-                            td.BaseType = cor.ResolveType(td, mreType.BaseType);
+                        if (diffType.BaseType != null)
+                            td.BaseType = corlib.ResolveType(diffType.BaseType);
 
-                        foreach (var field in mreType.Fields)
+                        foreach (var field in diffType.Fields)
                         {
                             var fd = td.Fields.FirstOrDefault(f => f.Name == field.Name);
 
                             if (fd == null)
                             {
                                 fd = new FieldDefinition(field.Name, field.Attributes,
-                                                         cor.ResolveType(td, field.FieldType));
+                                                         corlib.ResolveType(field.FieldType));
 
                                 if (field.HasConstant)
                                     fd.Constant = field.Constant;
                                 td.Fields.Add(fd);
                             }
                             else
-                                fd.FieldType = cor.ResolveType(td, field.FieldType);
-
-                            if (td.Name == "Assembly")
                             {
-                                fd.IsPrivate = false;
-                                fd.IsAssembly = true;
+                                fd.FieldType = corlib.ResolveType(field.FieldType);
+                                fd.Attributes = field.Attributes;
                             }
 
-                            corFields[fd.FullName] = fd;
+                            diffFields[fd.FullName] = fd;
                         }
 
-                        foreach (var method in mreType.Methods)
+                        foreach (var method in diffType.Methods)
                         {
                             var md = td.Methods.FirstOrDefault(m => m.FullName == method.FullName);
 
                             if (md == null)
                             {
                                 md = new MethodDefinition(method.Name, method.Attributes,
-                                                          cor.ImportReference(typeof(void)));
+                                                          corlib.ImportReference(typeof(void)));
 
-                                md.ReturnType = cor.ResolveType(md, method.ReturnType);
-                                md.IsInternalCall = method.IsInternalCall;
+                                td.Methods.Add(md);
 
                                 foreach (var genPara in method.GenericParameters)
                                 {
@@ -90,10 +124,13 @@ namespace SRESplitter
                                     md.GenericParameters.Add(gp);
                                 }
 
+                                md.ReturnType = corlib.ResolveType(method.ReturnType);
+                                md.IsInternalCall = method.IsInternalCall;
+
                                 foreach (var param in method.Parameters)
                                 {
                                     var pd = new ParameterDefinition(param.Name, param.Attributes,
-                                                                     cor.ResolveType(md, param.ParameterType))
+                                                                     corlib.ResolveType(param.ParameterType, md))
                                     {
                                         Constant = param.Constant
                                     };
@@ -101,39 +138,38 @@ namespace SRESplitter
                                     md.Parameters.Add(pd);
                                 }
 
-                                td.Methods.Add(md);
                             }
                             else
                             {
-                                md.ReturnType = cor.ResolveType(md, method.ReturnType);
+                                md.ReturnType = corlib.ResolveType(method.ReturnType, md);
 
                                 foreach (var param in md.Parameters)
-                                    param.ParameterType = cor.ResolveType(md, param.ParameterType);
+                                    param.ParameterType = corlib.ResolveType(param.ParameterType, md);
                             }
 
-                            corMethods[md.FullName] = md;
+                            diffMethods[md.FullName] = md;
                         }
                     }
 
                     Console.WriteLine("PASS 3: Copying over IL");
 
-                    foreach (var corTypePair in corTypes)
+                    foreach (var corTypePair in diffTypes)
                     {
                         var td = corTypePair.Value;
-                        var mreType = mre.MainModule.GetType(td.FullName);
+                        var diffType = diffDll.MainModule.GetType(td.FullName);
 
                         Console.WriteLine(td.FullName);
 
                         foreach (var md in td.Methods)
                         {
-                            var mreMethod = mreType.Methods.FirstOrDefault(m => m.FullName == md.FullName);
+                            var diffMethod = diffType.Methods.FirstOrDefault(m => m.FullName == md.FullName);
 
-                            if (mreMethod == null)
+                            if (diffMethod == null)
                                 continue;
 
                             Console.WriteLine(md.FullName);
 
-                            if (!mreMethod.HasBody)
+                            if (!diffMethod.HasBody)
                                 continue;
 
                             // Remove old instructions cuz yolo
@@ -146,43 +182,43 @@ namespace SRESplitter
                             var fixupTable = new Dictionary<int, int>();
                             var fixupArrayTable = new Dictionary<int, int[]>();
 
-                            md.Body.InitLocals = mreMethod.Body.InitLocals;
+                            md.Body.InitLocals = diffMethod.Body.InitLocals;
 
-                            foreach (var variableDefinition in mreMethod.Body.Variables)
+                            foreach (var variableDefinition in diffMethod.Body.Variables)
                             {
-                                var vd = new VariableDefinition(cor.ResolveType(md, variableDefinition.VariableType));
+                                var vd = new VariableDefinition(corlib.ResolveType(variableDefinition.VariableType));
                                 md.Body.Variables.Add(vd);
                                 varTable[vd.Index] = vd;
                             }
 
-                            for (var index = 0; index < mreMethod.Body.Instructions.Count; index++)
+                            for (var index = 0; index < diffMethod.Body.Instructions.Count; index++)
                             {
-                                var ins = mreMethod.Body.Instructions[index];
+                                var ins = diffMethod.Body.Instructions[index];
 
                                 switch (ins.Operand)
                                 {
                                     case CallSite cs:
                                         throw new Exception($"Got call site: {cs}. Dunno how to handle that.");
                                     case Instruction label:
-                                        fixupTable[index] = mreMethod.Body.Instructions.IndexOf(label);
+                                        fixupTable[index] = diffMethod.Body.Instructions.IndexOf(label);
                                         il.Emit(ins.OpCode, Instruction.Create(OpCodes.Nop));
                                         break;
                                     case Instruction[] labels:
                                         fixupArrayTable[index] =
-                                            labels.Select(l => mreMethod.Body.Instructions.IndexOf(l)).ToArray();
+                                            labels.Select(l => diffMethod.Body.Instructions.IndexOf(l)).ToArray();
                                         il.Emit(ins.OpCode, new Instruction[0]);
                                         break;
                                     case VariableDefinition vd:
                                         il.Emit(ins.OpCode, varTable[vd.Index]);
                                         break;
                                     case FieldReference fr:
-                                        il.Emit(ins.OpCode, cor.GetFieldRef(fr));
+                                        il.Emit(ins.OpCode, corlib.GetFieldRef(fr));
                                         break;
                                     case MethodReference mr:
-                                        il.Emit(ins.OpCode, cor.GetMethodRef(mr));
+                                        il.Emit(ins.OpCode, corlib.GetMethodRef(mr));
                                         break;
                                     case TypeReference tr:
-                                        il.Emit(ins.OpCode, cor.ResolveType(md, tr));
+                                        il.Emit(ins.OpCode, corlib.ResolveType(tr));
                                         break;
                                     case ParameterDefinition pd:
                                         il.Emit(ins.OpCode, md.Parameters[pd.Index]);
@@ -201,6 +237,9 @@ namespace SRESplitter
                                         break;
                                     case long l:
                                         il.Emit(ins.OpCode, l);
+                                        break;
+                                    case double d:
+                                        il.Emit(ins.OpCode, d);
                                         break;
                                     case string s:
                                         il.Emit(ins.OpCode, s);
@@ -222,59 +261,59 @@ namespace SRESplitter
 
                     Console.WriteLine("PASS 4: Gluing properties, adding attributes");
 
-                    foreach (var corTypePair in corTypes)
+                    foreach (var corTypePair in diffTypes)
                     {
                         var td = corTypePair.Value;
-                        var mreType = mre.MainModule.GetType(td.FullName);
+                        var diffType = diffDll.MainModule.GetType(td.FullName);
 
                         Console.WriteLine(td.FullName);
 
-                        foreach (var mreProperty in mreType.Properties)
+                        foreach (var diffProperty in diffType.Properties)
                         {
-                            var pd = td.Properties.FirstOrDefault(p => p.FullName == mreProperty.FullName);
+                            var pd = td.Properties.FirstOrDefault(p => p.FullName == diffProperty.FullName);
 
                             if (pd == null)
                             {
-                                pd = new PropertyDefinition(mreProperty.Name, mreProperty.Attributes,
-                                                            cor.ResolveType(td, mreProperty.PropertyType));
+                                pd = new PropertyDefinition(diffProperty.Name, diffProperty.Attributes,
+                                                            corlib.ResolveType(diffProperty.PropertyType));
                                 td.Properties.Add(pd);
                             }
 
-                            if (mreProperty.GetMethod != null)
-                                pd.GetMethod = corMethods[mreProperty.GetMethod.FullName];
-                            if (mreProperty.SetMethod != null)
-                                pd.GetMethod = corMethods[mreProperty.SetMethod.FullName];
+                            if (diffProperty.GetMethod != null)
+                                pd.GetMethod = diffMethods[diffProperty.GetMethod.FullName];
+                            if (diffProperty.SetMethod != null)
+                                pd.GetMethod = diffMethods[diffProperty.SetMethod.FullName];
                         }
 
                         // Remove old attributes cuz yolo
                         td.CustomAttributes.Clear();
 
-                        foreach (var sreAttr in mreType.CustomAttributes)
+                        foreach (var sreAttr in diffType.CustomAttributes)
                         {
-                            var ca = new CustomAttribute(cor.GetMethodRef(sreAttr.Constructor), sreAttr.GetBlob());
+                            var ca = new CustomAttribute(corlib.GetMethodRef(sreAttr.Constructor), sreAttr.GetBlob());
                             td.CustomAttributes.Add(ca);
                         }
 
                         foreach (var md in td.Methods)
                         {
-                            var mreMethod = mreType.Methods.FirstOrDefault(m => m.FullName == md.FullName);
+                            var diffMethod = diffType.Methods.FirstOrDefault(m => m.FullName == md.FullName);
 
-                            if (mreMethod == null)
+                            if (diffMethod == null)
                                 continue;
 
                             Console.WriteLine(md.FullName);
 
                             md.CustomAttributes.Clear();
-                            foreach (var sreAttr in mreMethod.CustomAttributes)
+                            foreach (var diffAttr in diffMethod.CustomAttributes)
                             {
-                                var ca = new CustomAttribute(cor.GetMethodRef(sreAttr.Constructor), sreAttr.GetBlob());
+                                var ca = new CustomAttribute(corlib.GetMethodRef(diffAttr.Constructor), diffAttr.GetBlob());
                                 md.CustomAttributes.Add(ca);
                             }
                         }
                     }
 
                     Console.WriteLine("Writing generated DLL");
-                    corlib.Write("mscorlib_fixed.dll");
+                    corlibDll.Write("mscorlib_fixed.dll");
                 }
 
             Console.WriteLine("Done");
@@ -300,42 +339,44 @@ namespace SRESplitter
                 }
 
                 Console.WriteLine(mreType.FullName);
-                corTypes[td.FullName] = td;
+                diffTypes[td.FullName] = td;
 
                 RegisterTypes(cor, td, mreType.NestedTypes);
             }
         }
 
         private static TypeReference ResolveType(this ModuleDefinition mre,
-                                                 IGenericParameterProvider md,
-                                                 TypeReference tr)
+                                                 TypeReference tr, IGenericParameterProvider genericParamProvider = null)
         {
-            if (corTypes.TryGetValue(tr.FullName, out var result))
+            if (diffTypes.TryGetValue(tr.FullName, out var result))
                 return result;
 
             switch (tr)
             {
-                case ArrayType at: return ResolveType(mre, md, at.ElementType).MakeArrayType();
-                case ByReferenceType brt: return ResolveType(mre, md, brt.ElementType).MakeByReferenceType();
-                case PointerType pt: return ResolveType(mre, md, pt.ElementType).MakePointerType();
-                case PinnedType pt: return ResolveType(mre, md, pt.ElementType).MakePinnedType();
+                case ArrayType at: return ResolveType(mre, at.ElementType, genericParamProvider).MakeArrayType();
+                case ByReferenceType brt: return ResolveType(mre, brt.ElementType, genericParamProvider).MakeByReferenceType();
+                case PointerType pt: return ResolveType(mre, pt.ElementType, genericParamProvider).MakePointerType();
+                case PinnedType pt: return ResolveType(mre, pt.ElementType, genericParamProvider).MakePinnedType();
                 case GenericInstanceType git:
-                    return ResolveType(mre, md, git.ElementType)
-                       .MakeGenericInstanceType(git.GenericArguments.Select(t => ResolveType(mre, md, t)).ToArray());
+                    return ResolveType(mre, git.ElementType, genericParamProvider)
+                       .MakeGenericInstanceType(git.GenericArguments.Select(t => ResolveType(mre, t, genericParamProvider)).ToArray());
                 case GenericParameter gp:
-                {
-                    if (gp.DeclaringMethod == null)
-                        throw new Exception("Type generics not supported because I'm lazy");
+                    {
+                        GenericParameter res;
+                        if (gp.DeclaringMethod != null)
+                        {
+                            var md = genericParamProvider ?? mre.GetType(gp.DeclaringMethod.DeclaringType.FullName).Methods.First(m => m.FullName == gp.DeclaringMethod.FullName);
+                            res = md.GenericParameters.FirstOrDefault(g => g.Name == gp.Name);
+                            if (res != null)
+                                return res;
+                        }
 
-                    var res = md.GenericParameters.FirstOrDefault(g => g.Name == gp.Name);
-                    if (res != null)
-                        return res;
+                        res = mre.GetType(gp.DeclaringType.FullName).GenericParameters.FirstOrDefault(g => g.Name == gp.Name);
+                        if (res != null)
+                            return res;
 
-                    res = new GenericParameter(gp.Name, md) {Attributes = gp.Attributes};
-
-                    md.GenericParameters.Add(res);
-                    return res;
-                }
+                        throw new Exception($"Tried to resolve generic type {gp} that does not exist!");
+                    }
             }
 
             return mre.ImportReference(tr);

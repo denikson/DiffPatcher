@@ -63,10 +63,10 @@
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="Mono.Reflection.Emit.dll">
+    <Content Include="mscorlib.dll">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
-    <Content Include="mscorlib.dll">
+    <Content Include="mscorlib_diff.dll">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

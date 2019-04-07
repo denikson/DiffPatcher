@@ -52,8 +52,8 @@ namespace SRESplitter
                         typesToInclude.Add(toType);
                     else
                     {
-                        if (!nestedTypesToInclude.TryGetValue(toType.FullName, out var list))
-                            nestedTypesToInclude[toType.FullName] = list = new List<TypeDefinition>();
+                        if (!nestedTypesToInclude.TryGetValue(parent.FullName, out var list))
+                            nestedTypesToInclude[parent.FullName] = list = new List<TypeDefinition>();
                         list.Add(toType);
                     }
 
@@ -222,6 +222,8 @@ namespace SRESplitter
 
                             md.ReturnType = diff.ResolveType(method.ReturnType, md);
                             md.IsInternalCall = method.IsInternalCall;
+                            md.IsRuntime = method.IsRuntime;
+                            md.IsManaged = method.IsManaged;
 
                             foreach (var param in method.Parameters)
                             {
@@ -252,6 +254,9 @@ namespace SRESplitter
                         
                         foreach (var md in td.Methods)
                         {
+                            if(md.IsRuntime)
+                                continue;
+
                             var originalMethod = originalType.Methods.First(m => m.FullName == md.FullName);
 
                             Console.WriteLine(md.FullName);
@@ -373,6 +378,9 @@ namespace SRESplitter
 
                         foreach (var md in td.Methods)
                         {
+                            if(md.IsRuntime)
+                                continue;
+
                             var originalMethod = originalType.Methods.First(m => m.FullName == md.FullName);
 
                             Console.WriteLine(md.FullName);
