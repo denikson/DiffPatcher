@@ -28,6 +28,8 @@ namespace SRESplitter
         private static readonly Dictionary<string, List<MethodDefinition>> methodsToInclude =
             new Dictionary<string, List<MethodDefinition>>();
 
+        static HashSet<string> blacklist = new HashSet<string> {"AppContextSwitches", "Activator", "Attribute", "CharEnumerator", "ConsoleCancelEventArgs", "Delegate", "Environment", "Exception", "LocalDataStoreSlot", "MarshalByRefObject", "MonoCustomAttrs", "TimeZoneInfo", "Variant" };
+
         private static void Diff(ModuleDefinition from,
                                  IEnumerable<TypeDefinition> toTypes,
                                  TypeDefinition parent = null)
@@ -37,6 +39,16 @@ namespace SRESplitter
                 // Skip generic parameters for now because of resolving issues
                 //if(toType.HasGenericParameters)
                 //    continue;
+
+                if(blacklist.Contains(toType.Name))
+                    continue;
+
+                if (toType.Namespace != "System" && toType.Namespace != "System.Reflection" &&
+                    toType.Namespace != "System.Reflection.Emit" && toType.Namespace != "Mono.Interop")
+                {
+                    if(parent == null)
+                        continue;
+                }
 
                 var fromType = from.GetType(toType.FullName);
 
@@ -200,6 +212,8 @@ namespace SRESplitter
                     }
 
                     td.IsAbstract = originalType.IsAbstract;
+                    td.IsSequentialLayout = originalType.IsSequentialLayout;
+                    td.IsSealed = originalType.IsSealed;
 
                     if (fieldsToInclude.TryGetValue(td.FullName, out var fields))
                         foreach (var field in fields)
@@ -361,7 +375,7 @@ namespace SRESplitter
 
                         foreach (var entry in fixupArrayTable)
                             md.Body.Instructions[entry.Key].Operand =
-                                md.Body.Instructions.Where((ins, i) => entry.Value.Contains(i)).ToArray();
+                                entry.Value.Select(i => md.Body.Instructions[i]).ToArray();
 
                         if (originalMethod.Body.HasExceptionHandlers)
                             foreach (var bodyExceptionHandler in originalMethod.Body.ExceptionHandlers)
@@ -432,13 +446,25 @@ namespace SRESplitter
 
                         var originalMethod = originalType.Methods.First(m => m.FullName == md.FullName);
 
-                        Console.WriteLine(md.FullName);
-
                         foreach (var originalAttr in originalMethod.CustomAttributes)
                         {
                             var ca = new CustomAttribute(diff.GetMethodRef(originalAttr.Constructor),
                                                          originalAttr.GetBlob());
+                            
                             md.CustomAttributes.Add(ca);
+                        }
+
+                        for (var i = 0; i < md.Parameters.Count; i++)
+                        {
+                            var pd = md.Parameters[i];
+                            var pOriginal = originalMethod.Parameters[i];
+
+                            foreach (var pAttr in pOriginal.CustomAttributes)
+                            {
+                                var pca = new CustomAttribute(diff.GetMethodRef(pAttr.Constructor), pAttr.GetBlob());
+
+                                pd.CustomAttributes.Add(pca);
+                            }
                         }
                     }
                 }

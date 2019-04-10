@@ -104,6 +104,8 @@ namespace SRESplitter
                     }
 
                     td.IsAbstract = diffType.IsAbstract;
+                    td.IsSequentialLayout = diffType.IsSequentialLayout;
+                    td.IsSealed = diffType.IsSealed;
 
                     foreach (var field in diffType.Fields)
                     {
@@ -148,6 +150,7 @@ namespace SRESplitter
                             md.IsInternalCall = method.IsInternalCall;
                             md.IsRuntime = method.IsRuntime;
                             md.IsManaged = method.IsManaged;
+
                             if (method.PInvokeInfo != null)
                             {
                                 var modRef =
@@ -176,6 +179,13 @@ namespace SRESplitter
                         else
                         {
                             md.ReturnType = corlib.ResolveType(method.ReturnType, md);
+
+                            md.IsInternalCall = method.IsInternalCall;
+                            md.IsRuntime = method.IsRuntime;
+                            md.IsManaged = method.IsManaged;
+                            md.IsPrivate = false;
+                            md.IsAssembly = false;
+                            md.IsPublic = true;
 
                             foreach (var param in md.Parameters)
                                 param.ParameterType = corlib.ResolveType(param.ParameterType, md);
@@ -292,7 +302,7 @@ namespace SRESplitter
 
                         foreach (var entry in fixupArrayTable)
                             md.Body.Instructions[entry.Key].Operand =
-                                md.Body.Instructions.Where((ins, i) => entry.Value.Contains(i)).ToArray();
+                                entry.Value.Select(i => md.Body.Instructions[i]).ToArray();
 
                         md.Body.ExceptionHandlers.Clear();
 
@@ -386,6 +396,19 @@ namespace SRESplitter
                             var ca = new CustomAttribute(corlib.GetMethodRef(diffAttr.Constructor),
                                                          diffAttr.GetBlob());
                             md.CustomAttributes.Add(ca);
+                        }
+
+                        for (var i = 0; i < md.Parameters.Count; i++)
+                        {
+                            var pd = md.Parameters[i];
+                            var pOriginal = diffMethod.Parameters[i];
+
+                            foreach (var pAttr in pOriginal.CustomAttributes)
+                            {
+                                var pca = new CustomAttribute(corlib.GetMethodRef(pAttr.Constructor), pAttr.GetBlob());
+
+                                pd.CustomAttributes.Add(pca);
+                            }
                         }
                     }
                 }
