@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
@@ -9,104 +10,115 @@ namespace NetPatch
 {
     public abstract class DiffPatchBase : IDisposable
     {
+        private static TypeReference EmptyType = new TypeReference("", "", null, null);
+
         private readonly Dictionary<string, FieldDefinition> diffFields = new Dictionary<string, FieldDefinition>();
 
         private readonly Dictionary<string, MethodDefinition> diffMethods = new Dictionary<string, MethodDefinition>();
 
         private readonly Dictionary<string, TypeDefinition> diffTypes = new Dictionary<string, TypeDefinition>();
 
-        public HashSet<string> ExcludeNamespaces { get; set; }
+        public HashSet<string> ExcludeNamespaces { get; set; } = new HashSet<string>();
 
-        public HashSet<string> ExcludeTypes { get; set; }
+        public HashSet<string> ExcludeTypes { get; set; } = new HashSet<string>();
 
         public virtual void Dispose() { }
 
-        public FieldReference ImportField(ModuleDefinition md, FieldReference fr)
+        public FieldReference ImportField(ModuleDefinition fromModule, ModuleDefinition toModule, FieldReference fr)
         {
             if (fr.DeclaringType is GenericInstanceType git)
             {
-                var res = ImportField(md, fr.Resolve());
-                var newGit = new GenericInstanceType(res.DeclaringType);
+                var newGit = new GenericInstanceType(ImportType(fromModule, toModule, git.ElementType));
 
                 foreach (var gitGenericArgument in git.GenericArguments)
-                    newGit.GenericArguments.Add(ImportType(md, gitGenericArgument));
+                    newGit.GenericArguments.Add(ImportType(fromModule, toModule, gitGenericArgument));
 
-                return new FieldReference(res.Name, res.FieldType, newGit);
+                return new FieldReference(fr.Name, ImportType(fromModule, toModule, fr.FieldType), newGit);
             }
 
             return diffFields.TryGetValue(fr.FullName, out var result)
                 ? result
-                : md.GetType(fr.DeclaringType.FullName).Fields.First(f => f.Name == fr.Name);
+                : GetOriginalField(fr, fromModule, toModule);
         }
 
-        public MethodReference ImportMethod(ModuleDefinition md, MethodReference mr)
+        public MethodReference ImportMethod(ModuleDefinition fromModule, ModuleDefinition toModule, MethodReference mr)
         {
             if (mr is GenericInstanceMethod gim)
             {
-                var newGim = new GenericInstanceMethod(ImportMethod(md, gim.ElementMethod.Resolve()));
+                var newGim = new GenericInstanceMethod(ImportMethod(fromModule, toModule, gim.ElementMethod.Resolve()));
 
                 foreach (var gimGenericArgument in gim.GenericArguments)
-                    newGim.GenericArguments.Add(ImportType(md, gimGenericArgument.DeclaringType));
+                    newGim.GenericArguments.Add(ImportType(fromModule, toModule, gimGenericArgument));
 
                 return newGim;
             }
 
             if (mr.DeclaringType is GenericInstanceType git)
             {
-                var res = ImportMethod(md, mr.Resolve());
+                var res = ImportMethod(fromModule, toModule, mr.Resolve());
                 var newGit = new GenericInstanceType(res.DeclaringType);
 
                 foreach (var gitGenericArgument in git.GenericArguments)
-                    newGit.GenericArguments.Add(ImportType(md, gitGenericArgument));
+                    newGit.GenericArguments.Add(ImportType(fromModule, toModule, gitGenericArgument));
 
                 var methodReference = new MethodReference(res.Name, res.ReturnType, newGit) {HasThis = res.HasThis};
 
                 foreach (var parameterDefinition in res.Parameters)
                     methodReference.Parameters.Add(new ParameterDefinition(parameterDefinition.Name,
                                                                            parameterDefinition.Attributes,
-                                                                           ImportType(
-                                                                               md, parameterDefinition.ParameterType)));
+                                                                           ImportType(fromModule, toModule, parameterDefinition.ParameterType)));
 
                 return methodReference;
             }
 
             return diffMethods.TryGetValue(mr.FullName, out var result)
                 ? result
-                : md.GetType(mr.DeclaringType.FullName).Methods.First(m => m.FullName == mr.FullName);
+                : GetOriginalMethod(mr, fromModule, toModule);
         }
 
-        public TypeReference ImportType(ModuleDefinition module,
+        protected abstract GenericParameter ResolveGenericParameter(GenericParameter gp, ModuleDefinition fromModule, ModuleDefinition toModule);
+
+        public TypeReference ImportType(ModuleDefinition fromModule, 
+                                        ModuleDefinition toModule,
                                         TypeReference tr,
                                         IGenericParameterProvider genericParamProvider = null)
         {
+            //if(tr.FullName == "System.Reflection.EventInfo/AddEvent`2<T,D>")
+            //    Debugger.Break();
+
             if (diffTypes.TryGetValue(tr.FullName, out var result))
                 return result;
 
             switch (tr)
             {
-                case ArrayType at: return ImportType(module, at.ElementType, genericParamProvider).MakeArrayType();
+                case ArrayType at: return ImportType(fromModule, toModule, at.ElementType, genericParamProvider).MakeArrayType();
                 case ByReferenceType brt:
-                    return ImportType(module, brt.ElementType, genericParamProvider).MakeByReferenceType();
-                case PointerType pt: return ImportType(module, pt.ElementType, genericParamProvider).MakePointerType();
-                case PinnedType pt: return ImportType(module, pt.ElementType, genericParamProvider).MakePinnedType();
+                    return ImportType(fromModule, toModule, brt.ElementType, genericParamProvider).MakeByReferenceType();
+                case PointerType pt: return ImportType(fromModule, toModule, pt.ElementType, genericParamProvider).MakePointerType();
+                case PinnedType pt: return ImportType(fromModule, toModule, pt.ElementType, genericParamProvider).MakePinnedType();
                 case GenericInstanceType git:
-                    return ImportType(module, git.ElementType, genericParamProvider).MakeGenericInstanceType(
-                        git.GenericArguments.Select(t => ImportType(module, t, genericParamProvider)).ToArray());
+                    return ImportType(fromModule, toModule, git.ElementType, genericParamProvider).MakeGenericInstanceType(
+                        git.GenericArguments.Select(t => ImportType(fromModule, toModule, t, genericParamProvider)).ToArray());
                 case GenericParameter gp:
                 {
                     GenericParameter res;
                     if (gp.DeclaringMethod != null)
                     {
                         var md = genericParamProvider ??
-                                 module.GetType(gp.DeclaringMethod.DeclaringType.FullName).Methods
+                                 toModule.GetType(gp.DeclaringMethod.DeclaringType.FullName).Methods
                                        .First(m => m.FullName == gp.DeclaringMethod.FullName);
                         res = md.GenericParameters.FirstOrDefault(g => g.Name == gp.Name);
                         if (res != null)
                             return res;
                     }
 
-                    res = module.GetType(gp.DeclaringType.FullName).GenericParameters
-                                .FirstOrDefault(g => g.Name == gp.Name);
+                    if (gp.Name.StartsWith("!"))
+                    {
+                        int index = int.Parse(gp.Name.Substring(1));
+                        return ImportType(fromModule, toModule, gp.DeclaringType).GenericParameters[index];
+                    }
+
+                    res = ResolveGenericParameter(gp, fromModule, toModule);
                     if (res != null)
                         return res;
 
@@ -114,7 +126,7 @@ namespace NetPatch
                 }
             }
 
-            return module.GetType(tr.FullName);
+            return GetOriginalType(tr, fromModule, toModule);
         }
 
         protected void CopyAttributesAndProperties(ModuleDefinition fromModule, ModuleDefinition toModule)
@@ -128,19 +140,27 @@ namespace NetPatch
                 {
                     var pd = toType.Properties.FirstOrDefault(p => p.Name == fromTypeProperty.Name);
 
+                    MethodDefinition getter = null, setter = null;
+
+                    var hasCustomGetter = fromTypeProperty.GetMethod != null && diffMethods.TryGetValue(fromTypeProperty.GetMethod.FullName, out getter);
+                    var hasCustomSetter = fromTypeProperty.SetMethod != null && diffMethods.TryGetValue(fromTypeProperty.SetMethod.FullName, out setter);
+
+                    if(!hasCustomGetter && !hasCustomSetter)
+                        continue;
+
                     if (pd == null)
                     {
                         pd = new PropertyDefinition(fromTypeProperty.Name, fromTypeProperty.Attributes,
-                                                    ImportType(toModule, fromTypeProperty.PropertyType));
+                                                    ImportType(fromModule, toModule, fromTypeProperty.PropertyType));
                         toType.Properties.Add(pd);
                     }
                     else
-                        pd.PropertyType = ImportType(toModule, fromTypeProperty.PropertyType);
+                        pd.PropertyType = ImportType(fromModule, toModule, fromTypeProperty.PropertyType);
 
-                    if (fromTypeProperty.GetMethod != null)
-                        pd.GetMethod = diffMethods[fromTypeProperty.GetMethod.FullName];
-                    if (fromTypeProperty.SetMethod != null)
-                        pd.SetMethod = diffMethods[fromTypeProperty.SetMethod.FullName];
+                    if (hasCustomGetter)
+                        pd.GetMethod = getter;
+                    if (hasCustomSetter)
+                        pd.SetMethod = setter;
                 }
 
                 // Remove old attributes cuz yolo
@@ -148,7 +168,7 @@ namespace NetPatch
 
                 foreach (var fromTypeAttribute in fromType.CustomAttributes)
                     toType.CustomAttributes.Add(new CustomAttribute(
-                                                    ImportMethod(toModule, fromTypeAttribute.Constructor),
+                                                    ImportMethod(fromModule, toModule, fromTypeAttribute.Constructor),
                                                     fromTypeAttribute.GetBlob()));
 
                 foreach (var toMethod in toType.Methods)
@@ -161,7 +181,7 @@ namespace NetPatch
                     toMethod.CustomAttributes.Clear();
                     foreach (var fromMethodAttribute in fromMethod.CustomAttributes)
                         toMethod.CustomAttributes.Add(new CustomAttribute(
-                                                          ImportMethod(toModule, fromMethodAttribute.Constructor),
+                                                          ImportMethod(fromModule, toModule, fromMethodAttribute.Constructor),
                                                           fromMethodAttribute.GetBlob()));
 
                     for (var i = 0; i < toMethod.Parameters.Count; i++)
@@ -171,7 +191,7 @@ namespace NetPatch
 
                         foreach (var pAttr in pOriginal.CustomAttributes)
                             pd.CustomAttributes.Add(
-                                new CustomAttribute(ImportMethod(toModule, pAttr.Constructor), pAttr.GetBlob()));
+                                new CustomAttribute(ImportMethod(fromModule, toModule, pAttr.Constructor), pAttr.GetBlob()));
                     }
                 }
             }
@@ -207,7 +227,7 @@ namespace NetPatch
 
                     foreach (var variableDefinition in fromMethod.Body.Variables)
                     {
-                        var vd = new VariableDefinition(ImportType(toModule, variableDefinition.VariableType));
+                        var vd = new VariableDefinition(ImportType(fromModule, toModule, variableDefinition.VariableType));
                         toMethod.Body.Variables.Add(vd);
                         varTable[vd.Index] = vd;
                     }
@@ -233,13 +253,13 @@ namespace NetPatch
                                 il.Emit(ins.OpCode, varTable[vd.Index]);
                                 break;
                             case FieldReference fr:
-                                il.Emit(ins.OpCode, ImportField(toModule, fr));
+                                il.Emit(ins.OpCode, ImportField(fromModule, toModule, fr));
                                 break;
                             case MethodReference mr:
-                                il.Emit(ins.OpCode, ImportMethod(toModule, mr));
+                                il.Emit(ins.OpCode, ImportMethod(fromModule, toModule, mr));
                                 break;
                             case TypeReference tr:
-                                il.Emit(ins.OpCode, ImportType(toModule, tr));
+                                il.Emit(ins.OpCode, ImportType(fromModule, toModule, tr));
                                 break;
                             case ParameterDefinition pd:
                                 il.Emit(ins.OpCode, toMethod.Parameters[pd.Index]);
@@ -285,7 +305,7 @@ namespace NetPatch
                         var exHandler = new ExceptionHandler(bodyExceptionHandler.HandlerType);
 
                         exHandler.CatchType = bodyExceptionHandler.CatchType != null
-                            ? ImportType(toModule, bodyExceptionHandler.CatchType)
+                            ? ImportType(fromModule, toModule, bodyExceptionHandler.CatchType)
                             : null;
 
                         if (bodyExceptionHandler.TryStart != null)
@@ -327,14 +347,14 @@ namespace NetPatch
                 var fromType = fromModule.GetType(td.FullName);
 
                 if (fromType.BaseType != null)
-                    td.BaseType = ImportType(toModule, fromType.BaseType);
+                    td.BaseType = ImportType(fromModule, toModule, fromType.BaseType);
 
                 foreach (var diffTypeInterface in fromType.Interfaces)
                 {
                     if (td.Interfaces.Any(i => i.InterfaceType.FullName == diffTypeInterface.InterfaceType.FullName))
                         continue;
 
-                    var imp = new InterfaceImplementation(ImportType(toModule, diffTypeInterface.InterfaceType));
+                    var imp = new InterfaceImplementation(ImportType(fromModule, toModule, diffTypeInterface.InterfaceType));
                     td.Interfaces.Add(imp);
                 }
 
@@ -348,7 +368,7 @@ namespace NetPatch
 
                     if (fd == null)
                     {
-                        fd = new FieldDefinition(field.Name, field.Attributes, ImportType(toModule, field.FieldType));
+                        fd = new FieldDefinition(field.Name, field.Attributes, ImportType(fromModule, toModule, field.FieldType));
 
                         if (field.HasConstant)
                             fd.Constant = field.Constant;
@@ -356,7 +376,7 @@ namespace NetPatch
                     }
                     else
                     {
-                        fd.FieldType = ImportType(toModule, field.FieldType);
+                        fd.FieldType = ImportType(fromModule, toModule, field.FieldType);
                         fd.Attributes = field.Attributes;
                     }
 
@@ -369,7 +389,7 @@ namespace NetPatch
 
                     if (md == null)
                     {
-                        md = new MethodDefinition(method.Name, method.Attributes, toModule.GetType("System.Void"));
+                        md = new MethodDefinition(method.Name, method.Attributes, EmptyType);
 
                         td.Methods.Add(md);
 
@@ -379,7 +399,7 @@ namespace NetPatch
                             md.GenericParameters.Add(gp);
                         }
 
-                        md.ReturnType = ImportType(toModule, method.ReturnType);
+                        md.ReturnType = ImportType(fromModule, toModule, method.ReturnType);
                         md.IsInternalCall = method.IsInternalCall;
                         md.IsRuntime = method.IsRuntime;
                         md.IsManaged = method.IsManaged;
@@ -401,7 +421,7 @@ namespace NetPatch
                         foreach (var param in method.Parameters)
                         {
                             var pd = new ParameterDefinition(param.Name, param.Attributes,
-                                                             ImportType(toModule, param.ParameterType));
+                                                             ImportType(fromModule, toModule, param.ParameterType, md));
                             if (param.HasConstant)
                                 pd.Constant = param.Constant;
 
@@ -410,7 +430,7 @@ namespace NetPatch
                     }
                     else
                     {
-                        md.ReturnType = ImportType(toModule, method.ReturnType);
+                        md.ReturnType = ImportType(fromModule, toModule, method.ReturnType);
 
                         md.IsInternalCall = method.IsInternalCall;
                         md.IsRuntime = method.IsRuntime;
@@ -420,7 +440,7 @@ namespace NetPatch
                         md.IsPublic = true;
 
                         foreach (var param in md.Parameters)
-                            param.ParameterType = ImportType(toModule, param.ParameterType);
+                            param.ParameterType = ImportType(fromModule, toModule, param.ParameterType);
                     }
 
                     diffMethods[md.FullName] = md;
@@ -433,6 +453,12 @@ namespace NetPatch
         protected abstract IEnumerable<FieldDefinition> GetFieldsToInclude(TypeDefinition td);
 
         protected abstract IEnumerable<MethodDefinition> GetMethodsToInclude(TypeDefinition td);
+
+        protected abstract MethodReference GetOriginalMethod(MethodReference method, ModuleDefinition fromModule, ModuleDefinition toModule);
+
+        protected abstract FieldReference GetOriginalField(FieldReference field, ModuleDefinition fromModule, ModuleDefinition toModule);
+
+        protected abstract TypeReference GetOriginalType(TypeReference method, ModuleDefinition fromModule, ModuleDefinition toModule);
 
         protected void RegisterTypes(ModuleDefinition target,
                                      IEnumerable<TypeDefinition> types,
