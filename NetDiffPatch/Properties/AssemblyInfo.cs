@@ -1,15 +1,14 @@
 ﻿using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 // General Information about an assembly is controlled through the following
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
-[assembly: AssemblyTitle("SRECombiner")]
+[assembly: AssemblyTitle("NetDiffPatch")]
 [assembly: AssemblyDescription("")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("")]
-[assembly: AssemblyProduct("SRECombiner")]
+[assembly: AssemblyProduct("NetDiffPatch")]
 [assembly: AssemblyCopyright("Copyright ©  2019")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
@@ -20,7 +19,7 @@ using System.Runtime.InteropServices;
 [assembly: ComVisible(false)]
 
 // The following GUID is for the ID of the typelib if this project is exposed to COM
-[assembly: Guid("3e2df68f-9c71-4c03-b195-2eb8b1d5fa24")]
+[assembly: Guid("c7ffdb40-cdf1-4ef2-9aaf-31831141ad52")]
 
 // Version information for an assembly consists of the following four values:
 //
