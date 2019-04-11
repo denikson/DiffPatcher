@@ -344,3 +344,4 @@ healthchecksdb
 MigrationBackup/
 /from_mscorlib.dll
 /to_mscorlib.dll
+*.dll

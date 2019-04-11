@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
@@ -10,7 +9,7 @@ namespace NetPatch
 {
     public abstract class DiffPatchBase : IDisposable
     {
-        private static TypeReference EmptyType = new TypeReference("", "", null, null);
+        private static readonly TypeReference EmptyType = new TypeReference("", "", null, null);
 
         private readonly Dictionary<string, FieldDefinition> diffFields = new Dictionary<string, FieldDefinition>();
 
@@ -66,7 +65,9 @@ namespace NetPatch
                 foreach (var parameterDefinition in res.Parameters)
                     methodReference.Parameters.Add(new ParameterDefinition(parameterDefinition.Name,
                                                                            parameterDefinition.Attributes,
-                                                                           ImportType(fromModule, toModule, parameterDefinition.ParameterType)));
+                                                                           ImportType(fromModule, toModule,
+                                                                                      parameterDefinition
+                                                                                         .ParameterType)));
 
                 return methodReference;
             }
@@ -76,9 +77,7 @@ namespace NetPatch
                 : GetOriginalMethod(mr, fromModule, toModule);
         }
 
-        protected abstract GenericParameter ResolveGenericParameter(GenericParameter gp, ModuleDefinition fromModule, ModuleDefinition toModule);
-
-        public TypeReference ImportType(ModuleDefinition fromModule, 
+        public TypeReference ImportType(ModuleDefinition fromModule,
                                         ModuleDefinition toModule,
                                         TypeReference tr,
                                         IGenericParameterProvider genericParamProvider = null)
@@ -91,22 +90,28 @@ namespace NetPatch
 
             switch (tr)
             {
-                case ArrayType at: return ImportType(fromModule, toModule, at.ElementType, genericParamProvider).MakeArrayType();
+                case ArrayType at:
+                    return ImportType(fromModule, toModule, at.ElementType, genericParamProvider).MakeArrayType();
                 case ByReferenceType brt:
-                    return ImportType(fromModule, toModule, brt.ElementType, genericParamProvider).MakeByReferenceType();
-                case PointerType pt: return ImportType(fromModule, toModule, pt.ElementType, genericParamProvider).MakePointerType();
-                case PinnedType pt: return ImportType(fromModule, toModule, pt.ElementType, genericParamProvider).MakePinnedType();
+                    return ImportType(fromModule, toModule, brt.ElementType, genericParamProvider)
+                       .MakeByReferenceType();
+                case PointerType pt:
+                    return ImportType(fromModule, toModule, pt.ElementType, genericParamProvider).MakePointerType();
+                case PinnedType pt:
+                    return ImportType(fromModule, toModule, pt.ElementType, genericParamProvider).MakePinnedType();
                 case GenericInstanceType git:
-                    return ImportType(fromModule, toModule, git.ElementType, genericParamProvider).MakeGenericInstanceType(
-                        git.GenericArguments.Select(t => ImportType(fromModule, toModule, t, genericParamProvider)).ToArray());
+                    return ImportType(fromModule, toModule, git.ElementType, genericParamProvider)
+                       .MakeGenericInstanceType(git.GenericArguments
+                                                   .Select(t => ImportType(fromModule, toModule, t,
+                                                                           genericParamProvider)).ToArray());
                 case GenericParameter gp:
                 {
                     GenericParameter res;
                     if (gp.DeclaringMethod != null)
                     {
-                        var md = genericParamProvider ??
-                                 toModule.GetType(gp.DeclaringMethod.DeclaringType.FullName).Methods
-                                       .First(m => m.FullName == gp.DeclaringMethod.FullName);
+                        var md = genericParamProvider ?? toModule
+                                                        .GetType(gp.DeclaringMethod.DeclaringType.FullName).Methods
+                                                        .First(m => m.FullName == gp.DeclaringMethod.FullName);
                         res = md.GenericParameters.FirstOrDefault(g => g.Name == gp.Name);
                         if (res != null)
                             return res;
@@ -114,7 +119,7 @@ namespace NetPatch
 
                     if (gp.Name.StartsWith("!"))
                     {
-                        int index = int.Parse(gp.Name.Substring(1));
+                        var index = int.Parse(gp.Name.Substring(1));
                         return ImportType(fromModule, toModule, gp.DeclaringType).GenericParameters[index];
                     }
 
@@ -142,10 +147,12 @@ namespace NetPatch
 
                     MethodDefinition getter = null, setter = null;
 
-                    var hasCustomGetter = fromTypeProperty.GetMethod != null && diffMethods.TryGetValue(fromTypeProperty.GetMethod.FullName, out getter);
-                    var hasCustomSetter = fromTypeProperty.SetMethod != null && diffMethods.TryGetValue(fromTypeProperty.SetMethod.FullName, out setter);
+                    var hasCustomGetter = fromTypeProperty.GetMethod != null &&
+                                          diffMethods.TryGetValue(fromTypeProperty.GetMethod.FullName, out getter);
+                    var hasCustomSetter = fromTypeProperty.SetMethod != null &&
+                                          diffMethods.TryGetValue(fromTypeProperty.SetMethod.FullName, out setter);
 
-                    if(!hasCustomGetter && !hasCustomSetter)
+                    if (!hasCustomGetter && !hasCustomSetter)
                         continue;
 
                     if (pd == null)
@@ -181,7 +188,8 @@ namespace NetPatch
                     toMethod.CustomAttributes.Clear();
                     foreach (var fromMethodAttribute in fromMethod.CustomAttributes)
                         toMethod.CustomAttributes.Add(new CustomAttribute(
-                                                          ImportMethod(fromModule, toModule, fromMethodAttribute.Constructor),
+                                                          ImportMethod(fromModule, toModule,
+                                                                       fromMethodAttribute.Constructor),
                                                           fromMethodAttribute.GetBlob()));
 
                     for (var i = 0; i < toMethod.Parameters.Count; i++)
@@ -191,7 +199,8 @@ namespace NetPatch
 
                         foreach (var pAttr in pOriginal.CustomAttributes)
                             pd.CustomAttributes.Add(
-                                new CustomAttribute(ImportMethod(fromModule, toModule, pAttr.Constructor), pAttr.GetBlob()));
+                                new CustomAttribute(ImportMethod(fromModule, toModule, pAttr.Constructor),
+                                                    pAttr.GetBlob()));
                     }
                 }
             }
@@ -227,7 +236,8 @@ namespace NetPatch
 
                     foreach (var variableDefinition in fromMethod.Body.Variables)
                     {
-                        var vd = new VariableDefinition(ImportType(fromModule, toModule, variableDefinition.VariableType));
+                        var vd = new VariableDefinition(
+                            ImportType(fromModule, toModule, variableDefinition.VariableType));
                         toMethod.Body.Variables.Add(vd);
                         varTable[vd.Index] = vd;
                     }
@@ -354,7 +364,8 @@ namespace NetPatch
                     if (td.Interfaces.Any(i => i.InterfaceType.FullName == diffTypeInterface.InterfaceType.FullName))
                         continue;
 
-                    var imp = new InterfaceImplementation(ImportType(fromModule, toModule, diffTypeInterface.InterfaceType));
+                    var imp = new InterfaceImplementation(
+                        ImportType(fromModule, toModule, diffTypeInterface.InterfaceType));
                     td.Interfaces.Add(imp);
                 }
 
@@ -368,7 +379,8 @@ namespace NetPatch
 
                     if (fd == null)
                     {
-                        fd = new FieldDefinition(field.Name, field.Attributes, ImportType(fromModule, toModule, field.FieldType));
+                        fd = new FieldDefinition(field.Name, field.Attributes,
+                                                 ImportType(fromModule, toModule, field.FieldType));
 
                         if (field.HasConstant)
                             fd.Constant = field.Constant;
@@ -454,11 +466,17 @@ namespace NetPatch
 
         protected abstract IEnumerable<MethodDefinition> GetMethodsToInclude(TypeDefinition td);
 
-        protected abstract MethodReference GetOriginalMethod(MethodReference method, ModuleDefinition fromModule, ModuleDefinition toModule);
+        protected abstract FieldReference GetOriginalField(FieldReference field,
+                                                           ModuleDefinition fromModule,
+                                                           ModuleDefinition toModule);
 
-        protected abstract FieldReference GetOriginalField(FieldReference field, ModuleDefinition fromModule, ModuleDefinition toModule);
+        protected abstract MethodReference GetOriginalMethod(MethodReference method,
+                                                             ModuleDefinition fromModule,
+                                                             ModuleDefinition toModule);
 
-        protected abstract TypeReference GetOriginalType(TypeReference method, ModuleDefinition fromModule, ModuleDefinition toModule);
+        protected abstract TypeReference GetOriginalType(TypeReference method,
+                                                         ModuleDefinition fromModule,
+                                                         ModuleDefinition toModule);
 
         protected void RegisterTypes(ModuleDefinition target,
                                      IEnumerable<TypeDefinition> types,
@@ -490,5 +508,9 @@ namespace NetPatch
                 RegisterTypes(target, GetChildrenToInclude(type), td);
             }
         }
+
+        protected abstract GenericParameter ResolveGenericParameter(GenericParameter gp,
+                                                                    ModuleDefinition fromModule,
+                                                                    ModuleDefinition toModule);
     }
 }

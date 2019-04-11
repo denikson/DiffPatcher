@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
@@ -15,18 +14,22 @@ namespace NetPatch
         private readonly Dictionary<string, List<FieldDefinition>> fieldsToInclude =
             new Dictionary<string, List<FieldDefinition>>();
 
+        private readonly ModuleDefinition from;
+
         private readonly Dictionary<string, List<MethodDefinition>> methodsToInclude =
             new Dictionary<string, List<MethodDefinition>>();
 
         private readonly Dictionary<string, List<TypeDefinition>> nestedTypesToInclude =
             new Dictionary<string, List<TypeDefinition>>();
 
-        private readonly HashSet<TypeDefinition> typesToInclude = new HashSet<TypeDefinition>();
-
-        private readonly ModuleDefinition from;
         private readonly ModuleDefinition to;
 
-        public NetDiffer(ModuleDefinition from, ModuleDefinition to, HashSet<string> excludeNamespaces = null, HashSet<string> excludeTypes = null)  
+        private readonly HashSet<TypeDefinition> typesToInclude = new HashSet<TypeDefinition>();
+
+        public NetDiffer(ModuleDefinition from,
+                         ModuleDefinition to,
+                         HashSet<string> excludeNamespaces = null,
+                         HashSet<string> excludeTypes = null)
         {
             this.from = from;
             this.to = to;
@@ -64,9 +67,6 @@ namespace NetPatch
             to?.Dispose();
         }
 
-        protected override GenericParameter ResolveGenericParameter(GenericParameter gp, ModuleDefinition fromModule, ModuleDefinition toModule) => fromModule.GetType(gp.DeclaringType.FullName).GenericParameters
-                                                                                                                                                              .FirstOrDefault(g => g.Name == gp.Name);
-
 
         protected override IEnumerable<TypeDefinition> GetChildrenToInclude(TypeDefinition type)
         {
@@ -83,26 +83,42 @@ namespace NetPatch
             return methodsToInclude.TryGetValue(td.FullName, out var result) ? result : new List<MethodDefinition>();
         }
 
-        protected override MethodReference GetOriginalMethod(MethodReference method,
-                                                             ModuleDefinition fromModule,
-                                                             ModuleDefinition toModule) =>
-            toModule.ImportReference(fromModule.GetType(method.DeclaringType.FullName).Methods.First(m => m.FullName == method.FullName));
-
         protected override FieldReference GetOriginalField(FieldReference field,
                                                            ModuleDefinition fromModule,
-                                                           ModuleDefinition toModule) =>
-            toModule.ImportReference(fromModule.GetType(field.DeclaringType.FullName).Fields.First(f => f.Name == field.Name));
+                                                           ModuleDefinition toModule)
+        {
+            return toModule.ImportReference(fromModule.GetType(field.DeclaringType.FullName).Fields
+                                                      .First(f => f.Name == field.Name));
+        }
+
+        protected override MethodReference GetOriginalMethod(MethodReference method,
+                                                             ModuleDefinition fromModule,
+                                                             ModuleDefinition toModule)
+        {
+            return toModule.ImportReference(fromModule.GetType(method.DeclaringType.FullName).Methods
+                                                      .First(m => m.FullName == method.FullName));
+        }
 
         protected override TypeReference GetOriginalType(TypeReference type,
                                                          ModuleDefinition fromModule,
-                                                         ModuleDefinition toModule) =>
-            toModule.ImportReference(fromModule.GetType(type.FullName));
+                                                         ModuleDefinition toModule)
+        {
+            return toModule.ImportReference(fromModule.GetType(type.FullName));
+        }
+
+        protected override GenericParameter
+            ResolveGenericParameter(GenericParameter gp, ModuleDefinition fromModule, ModuleDefinition toModule)
+        {
+            return fromModule.GetType(gp.DeclaringType.FullName).GenericParameters
+                             .FirstOrDefault(g => g.Name == gp.Name);
+        }
 
         private void InitDiff(IEnumerable<TypeDefinition> toTypes, TypeDefinition parent = null)
         {
             foreach (var toType in toTypes)
             {
-                if (ExcludeTypes.Contains(toType.FullName) || (parent == null && ExcludeNamespaces.Contains(toType.Namespace)))
+                if (ExcludeTypes.Contains(toType.FullName) ||
+                    parent == null && ExcludeNamespaces.Contains(toType.Namespace))
                     continue;
 
                 var fromType = from.GetType(toType.FullName);
