@@ -2,7 +2,7 @@
 using System.Linq;
 using Mono.Cecil;
 
-namespace NetPatch
+namespace NetDiffPatch
 {
     public class NetPatcher : DiffPatchBase
     {

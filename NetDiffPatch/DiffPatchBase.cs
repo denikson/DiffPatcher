@@ -5,24 +5,34 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
 
-namespace NetPatch
+namespace NetDiffPatch
 {
     public abstract class DiffPatchBase : IDisposable
     {
+        // Store full names of types/methods/types that need to be diffed
         private static readonly TypeReference EmptyType = new TypeReference("", "", null, null);
-
         private readonly Dictionary<string, FieldDefinition> diffFields = new Dictionary<string, FieldDefinition>();
-
         private readonly Dictionary<string, MethodDefinition> diffMethods = new Dictionary<string, MethodDefinition>();
-
         private readonly Dictionary<string, TypeDefinition> diffTypes = new Dictionary<string, TypeDefinition>();
 
+        // Namespaces to exclude from original assembly
         public HashSet<string> ExcludeNamespaces { get; set; } = new HashSet<string>();
 
+        // Types to exclude from the original assembly
         public HashSet<string> ExcludeTypes { get; set; } = new HashSet<string>();
 
-        public virtual void Dispose() { }
+        public virtual void Dispose()
+        {
+        }
 
+
+        /// <summary>
+        /// Import field reference from the original assembly.
+        /// </summary>
+        /// <param name="fromModule">Assembly to import field from</param>
+        /// <param name="toModule">Assembly to import field to</param>
+        /// <param name="fr">Field to reference</param>
+        /// <returns>Field reference (either imported from original assembly or the copied from the target assembly).</returns>
         public FieldReference ImportField(ModuleDefinition fromModule, ModuleDefinition toModule, FieldReference fr)
         {
             if (fr.DeclaringType is GenericInstanceType git)
@@ -40,6 +50,13 @@ namespace NetPatch
                 : GetOriginalField(fr, fromModule, toModule);
         }
 
+        /// <summary>
+        /// Import method reference.
+        /// </summary>
+        /// <param name="fromModule">Assembly to import field from</param>
+        /// <param name="toModule">Assembly to import field to</param>
+        /// <param name="mr">Method reference to import</param>
+        /// <returns>Method reference (either imported from original assembly or the copied from the target assembly).</returns>
         public MethodReference ImportMethod(ModuleDefinition fromModule, ModuleDefinition toModule, MethodReference mr)
         {
             if (mr is GenericInstanceMethod gim)
@@ -64,10 +81,10 @@ namespace NetPatch
 
                 foreach (var parameterDefinition in res.Parameters)
                     methodReference.Parameters.Add(new ParameterDefinition(parameterDefinition.Name,
-                                                                           parameterDefinition.Attributes,
-                                                                           ImportType(fromModule, toModule,
-                                                                                      parameterDefinition
-                                                                                         .ParameterType)));
+                        parameterDefinition.Attributes,
+                        ImportType(fromModule, toModule,
+                            parameterDefinition
+                                .ParameterType)));
 
                 return methodReference;
             }
@@ -77,14 +94,19 @@ namespace NetPatch
                 : GetOriginalMethod(mr, fromModule, toModule);
         }
 
+        /// <summary>
+        /// Get correct type reference for the given type.
+        /// </summary>
+        /// <param name="fromModule">Assembly to import from</param>
+        /// <param name="toModule">Assembly to import to</param>
+        /// <param name="tr">Type reference to import.</param>
+        /// <param name="genericParamProvider">If the reference is a generic type, the type that should own the generic type.</param>
+        /// <returns>Type reference (either imported from original assembly or the copied from the target assembly).</returns>
         public TypeReference ImportType(ModuleDefinition fromModule,
-                                        ModuleDefinition toModule,
-                                        TypeReference tr,
-                                        IGenericParameterProvider genericParamProvider = null)
+            ModuleDefinition toModule,
+            TypeReference tr,
+            IGenericParameterProvider genericParamProvider = null)
         {
-            //if(tr.FullName == "System.Reflection.EventInfo/AddEvent`2<T,D>")
-            //    Debugger.Break();
-
             if (diffTypes.TryGetValue(tr.FullName, out var result))
                 return result;
 
@@ -94,24 +116,24 @@ namespace NetPatch
                     return ImportType(fromModule, toModule, at.ElementType, genericParamProvider).MakeArrayType();
                 case ByReferenceType brt:
                     return ImportType(fromModule, toModule, brt.ElementType, genericParamProvider)
-                       .MakeByReferenceType();
+                        .MakeByReferenceType();
                 case PointerType pt:
                     return ImportType(fromModule, toModule, pt.ElementType, genericParamProvider).MakePointerType();
                 case PinnedType pt:
                     return ImportType(fromModule, toModule, pt.ElementType, genericParamProvider).MakePinnedType();
                 case GenericInstanceType git:
                     return ImportType(fromModule, toModule, git.ElementType, genericParamProvider)
-                       .MakeGenericInstanceType(git.GenericArguments
-                                                   .Select(t => ImportType(fromModule, toModule, t,
-                                                                           genericParamProvider)).ToArray());
+                        .MakeGenericInstanceType(git.GenericArguments
+                            .Select(t => ImportType(fromModule, toModule, t,
+                                genericParamProvider)).ToArray());
                 case GenericParameter gp:
                 {
                     GenericParameter res;
                     if (gp.DeclaringMethod != null)
                     {
                         var md = genericParamProvider ?? toModule
-                                                        .GetType(gp.DeclaringMethod.DeclaringType.FullName).Methods
-                                                        .First(m => m.FullName == gp.DeclaringMethod.FullName);
+                                     .GetType(gp.DeclaringMethod.DeclaringType.FullName).Methods
+                                     .First(m => m.FullName == gp.DeclaringMethod.FullName);
                         res = md.GenericParameters.FirstOrDefault(g => g.Name == gp.Name);
                         if (res != null)
                             return res;
@@ -134,6 +156,11 @@ namespace NetPatch
             return GetOriginalType(tr, fromModule, toModule);
         }
 
+        /// <summary>
+        /// Copies attributes and generates properties from getters and setters in the target assembly.
+        /// </summary>
+        /// <param name="fromModule">Assemblies to copy from.</param>
+        /// <param name="toModule">Assemblies to copy to.</param>
         protected void CopyAttributesAndProperties(ModuleDefinition fromModule, ModuleDefinition toModule)
         {
             foreach (var toTypePair in diffTypes)
@@ -158,7 +185,7 @@ namespace NetPatch
                     if (pd == null)
                     {
                         pd = new PropertyDefinition(fromTypeProperty.Name, fromTypeProperty.Attributes,
-                                                    ImportType(fromModule, toModule, fromTypeProperty.PropertyType));
+                            ImportType(fromModule, toModule, fromTypeProperty.PropertyType));
                         toType.Properties.Add(pd);
                     }
                     else
@@ -175,8 +202,8 @@ namespace NetPatch
 
                 foreach (var fromTypeAttribute in fromType.CustomAttributes)
                     toType.CustomAttributes.Add(new CustomAttribute(
-                                                    ImportMethod(fromModule, toModule, fromTypeAttribute.Constructor),
-                                                    fromTypeAttribute.GetBlob()));
+                        ImportMethod(fromModule, toModule, fromTypeAttribute.Constructor),
+                        fromTypeAttribute.GetBlob()));
 
                 foreach (var toMethod in toType.Methods)
                 {
@@ -188,9 +215,9 @@ namespace NetPatch
                     toMethod.CustomAttributes.Clear();
                     foreach (var fromMethodAttribute in fromMethod.CustomAttributes)
                         toMethod.CustomAttributes.Add(new CustomAttribute(
-                                                          ImportMethod(fromModule, toModule,
-                                                                       fromMethodAttribute.Constructor),
-                                                          fromMethodAttribute.GetBlob()));
+                            ImportMethod(fromModule, toModule,
+                                fromMethodAttribute.Constructor),
+                            fromMethodAttribute.GetBlob()));
 
                     for (var i = 0; i < toMethod.Parameters.Count; i++)
                     {
@@ -200,12 +227,17 @@ namespace NetPatch
                         foreach (var pAttr in pOriginal.CustomAttributes)
                             pd.CustomAttributes.Add(
                                 new CustomAttribute(ImportMethod(fromModule, toModule, pAttr.Constructor),
-                                                    pAttr.GetBlob()));
+                                    pAttr.GetBlob()));
                     }
                 }
             }
         }
 
+        /// <summary>
+        /// Copies instructions into all target method bodies.
+        /// </summary>
+        /// <param name="fromModule">Assembly to copy from.</param>
+        /// <param name="toModule">Assembly to copy to.</param>
         protected void CopyInstructions(ModuleDefinition fromModule, ModuleDefinition toModule)
         {
             foreach (var corTypePair in diffTypes)
@@ -229,11 +261,14 @@ namespace NetPatch
                     var il = toMethod.Body.GetILProcessor();
 
                     var varTable = new Dictionary<int, VariableDefinition>();
+
+                    // A fixup table for all branch instruction locations
                     var fixupTable = new Dictionary<int, int>();
                     var fixupArrayTable = new Dictionary<int, int[]>();
 
                     toMethod.Body.InitLocals = fromMethod.Body.InitLocals;
 
+                    // Copy over all variables
                     foreach (var variableDefinition in fromMethod.Body.Variables)
                     {
                         var vd = new VariableDefinition(
@@ -301,6 +336,7 @@ namespace NetPatch
                         }
                     }
 
+                    // Fixup branching operands
                     foreach (var entry in fixupTable)
                         toMethod.Body.Instructions[entry.Key].Operand = toMethod.Body.Instructions[entry.Value];
 
@@ -310,6 +346,7 @@ namespace NetPatch
 
                     toMethod.Body.ExceptionHandlers.Clear();
 
+                    // Copy over exception handlers
                     foreach (var bodyExceptionHandler in fromMethod.Body.ExceptionHandlers)
                     {
                         var exHandler = new ExceptionHandler(bodyExceptionHandler.HandlerType);
@@ -349,6 +386,11 @@ namespace NetPatch
             }
         }
 
+        /// <summary>
+        /// Copy over type definitions.
+        /// </summary>
+        /// <param name="fromModule">Assemblies to copy from.</param>
+        /// <param name="toModule">Assemblies to copy to.</param>
         protected void GenerateTypeDefinitions(ModuleDefinition fromModule, ModuleDefinition toModule)
         {
             foreach (var typePair in diffTypes)
@@ -380,7 +422,7 @@ namespace NetPatch
                     if (fd == null)
                     {
                         fd = new FieldDefinition(field.Name, field.Attributes,
-                                                 ImportType(fromModule, toModule, field.FieldType));
+                            ImportType(fromModule, toModule, field.FieldType));
 
                         if (field.HasConstant)
                             fd.Constant = field.Constant;
@@ -427,13 +469,13 @@ namespace NetPatch
                             }
 
                             md.PInvokeInfo = new PInvokeInfo(method.PInvokeInfo.Attributes,
-                                                             method.PInvokeInfo.EntryPoint, modRef);
+                                method.PInvokeInfo.EntryPoint, modRef);
                         }
 
                         foreach (var param in method.Parameters)
                         {
                             var pd = new ParameterDefinition(param.Name, param.Attributes,
-                                                             ImportType(fromModule, toModule, param.ParameterType, md));
+                                ImportType(fromModule, toModule, param.ParameterType, md));
                             if (param.HasConstant)
                                 pd.Constant = param.Constant;
 
@@ -460,27 +502,70 @@ namespace NetPatch
             }
         }
 
+        /// <summary>
+        /// Gets nested types of the given type to include in patching.
+        /// </summary>
+        /// <param name="type">Type to get nested types from.</param>
+        /// <returns>Nested types include in the patching process.</returns>
         protected abstract IEnumerable<TypeDefinition> GetChildrenToInclude(TypeDefinition type);
 
+        /// <summary>
+        /// Get fields from the type to include in patching.
+        /// </summary>
+        /// <param name="td">Type to search fields from.</param>
+        /// <returns>Fields to include.</returns>
         protected abstract IEnumerable<FieldDefinition> GetFieldsToInclude(TypeDefinition td);
 
+        /// <summary>
+        /// Get methods from the type to include in patching.
+        /// </summary>
+        /// <param name="td">Type to search method from.</param>
+        /// <returns>Types to include.</returns>
         protected abstract IEnumerable<MethodDefinition> GetMethodsToInclude(TypeDefinition td);
 
+
+        /// <summary>
+        /// Resolve given field into the correct assembly.
+        /// </summary>
+        /// <param name="field">Field to resolve.</param>
+        /// <param name="fromModule">Assembly to import from.</param>
+        /// <param name="toModule">Assembly to import to.</param>
+        /// <returns>Field in the correct assembly.</returns>
         protected abstract FieldReference GetOriginalField(FieldReference field,
-                                                           ModuleDefinition fromModule,
-                                                           ModuleDefinition toModule);
+            ModuleDefinition fromModule,
+            ModuleDefinition toModule);
 
+        /// <summary>
+        /// Resolve given method into the correct assembly.
+        /// </summary>
+        /// <param name="method">Method to resolve.</param>
+        /// <param name="fromModule">Assembly to import from.</param>
+        /// <param name="toModule">Assembly to import to.</param>
+        /// <returns>Method in the correct assembly.</returns>
         protected abstract MethodReference GetOriginalMethod(MethodReference method,
-                                                             ModuleDefinition fromModule,
-                                                             ModuleDefinition toModule);
+            ModuleDefinition fromModule,
+            ModuleDefinition toModule);
 
-        protected abstract TypeReference GetOriginalType(TypeReference method,
-                                                         ModuleDefinition fromModule,
-                                                         ModuleDefinition toModule);
+        /// <summary>
+        /// Resolve given type into the correct assembly.
+        /// </summary>
+        /// <param name="type">Type to resolve.</param>
+        /// <param name="fromModule">Assembly to import from.</param>
+        /// <param name="toModule">Assembly to import to.</param>
+        /// <returns>Type in the correct assembly.</returns>
+        protected abstract TypeReference GetOriginalType(TypeReference type,
+            ModuleDefinition fromModule,
+            ModuleDefinition toModule);
 
+        /// <summary>
+        /// Create type definitions in the target assembly.
+        /// </summary>
+        /// <param name="target">Assembly to include types into.</param>
+        /// <param name="types">Types to include.</param>
+        /// <param name="parent">Parent type.</param>
         protected void RegisterTypes(ModuleDefinition target,
-                                     IEnumerable<TypeDefinition> types,
-                                     TypeDefinition parent = null)
+            IEnumerable<TypeDefinition> types,
+            TypeDefinition parent = null)
         {
             if (types == null)
                 return;
@@ -509,8 +594,15 @@ namespace NetPatch
             }
         }
 
+        /// <summary>
+        /// Create a copy of the generic parameter (or import it from the original assembly). 
+        /// </summary>
+        /// <param name="gp">Parameter to import.</param>
+        /// <param name="fromModule">Module to import type from.</param>
+        /// <param name="toModule">Module to import type to.</param>
+        /// <returns>Imported generic parameter.</returns>
         protected abstract GenericParameter ResolveGenericParameter(GenericParameter gp,
-                                                                    ModuleDefinition fromModule,
-                                                                    ModuleDefinition toModule);
+            ModuleDefinition fromModule,
+            ModuleDefinition toModule);
     }
 }

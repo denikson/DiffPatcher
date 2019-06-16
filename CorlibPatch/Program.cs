@@ -2,7 +2,7 @@
 using System.IO;
 using System.Reflection;
 using Mono.Cecil;
-using NetPatch;
+using NetDiffPatch;
 
 namespace CorlibPatch
 {
