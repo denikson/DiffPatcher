@@ -10,14 +10,13 @@ namespace CorlibPatch
     {
         private static int Main(string[] args)
         {
-            //if (args.Length == 0 || !File.Exists(args[0]))
-            //{
-            //    Console.WriteLine("The first (and only argument) must be a path to mscorlib.dll");
-            //    return 1;
-            //}
+            if (args.Length == 0 || !File.Exists(args[0]))
+            {
+                Console.WriteLine("The first (and only argument) must be a path to mscorlib.dll");
+                return 1;
+            }
 
-            var from = "from_mscorlib.dll";
-
+            var from = args[0]; 
 
             Console.WriteLine("Loading assemblies into Cecil");
             using (var diff =
