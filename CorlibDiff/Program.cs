@@ -30,6 +30,7 @@ namespace CorlibDiff
                         "System.Variant"
                     };
 
+
                     foreach (var s in from.MainModule.Types.Select(t => t.Namespace))
                         nsBlacklist.Add(s);
                     foreach (var s in to.MainModule.Types.Select(t => t.Namespace))

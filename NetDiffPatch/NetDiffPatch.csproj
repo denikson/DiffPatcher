@@ -52,6 +52,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="DiffPatchBase.cs" />
+    <Compile Include="MonoExt.cs" />
     <Compile Include="NetDiffer.cs" />
     <Compile Include="NetPatcher.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

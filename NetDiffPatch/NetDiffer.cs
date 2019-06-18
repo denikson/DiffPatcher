@@ -1,8 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
+using MonoMod.Utils;
 
 namespace NetDiffPatch
 {
@@ -26,6 +28,8 @@ namespace NetDiffPatch
 
         private readonly HashSet<TypeDefinition> typesToInclude = new HashSet<TypeDefinition>();
 
+        private ModuleDefinition diffMD;
+
         public NetDiffer(ModuleDefinition from,
                          ModuleDefinition to,
                          HashSet<string> excludeNamespaces = null,
@@ -48,23 +52,63 @@ namespace NetDiffPatch
                 new AssemblyNameDefinition($"{from.Assembly.Name.Name}_diff", new Version(1, 0)),
                 $"{from.Assembly.Name.Name}_diff", ModuleKind.Dll);
 
-            var diff = diffDll.MainModule;
 
+            diffMD = diffDll.MainModule;
+            
             // Reference original assembly to resolve stuff we don't import
-            diff.AssemblyReferences.Add(to.Assembly.Name);
+            diffMD.AssemblyReferences.Add(to.Assembly.Name);
 
-            RegisterTypes(diff, typesToInclude);
-            GenerateTypeDefinitions(to, diff);
-            CopyInstructions(to, diff);
-            CopyAttributesAndProperties(to, diff);
+            RegisterTypes(diffMD, typesToInclude);
+            GenerateTypeDefinitions(to, diffMD);
+            CopyInstructions(to, diffMD);
+            CopyAttributesAndProperties(to, diffMD);
+            //var diff = diffDll.MainModule;
+
+            //// Reference original assembly to resolve stuff we don't import
+            //diff.AssemblyReferences.Add(to.Assembly.Name);
+
+            //RegisterTypes(diff, typesToInclude);
+            //GenerateTypeDefinitions(to, diff);
+            //CopyInstructions(to, diff);
+            //CopyAttributesAndProperties(to, diff);
+
+            //RunDiff(diffDll);
 
             return diffDll;
+        }
+
+        private void RunDiff(AssemblyDefinition diffDll)
+        {
+            var diffMD = diffDll.MainModule;
+            RegisterTypes(diffMD, typesToInclude);
+            GenerateTypeDefinitions(to, diffMD);
+            CopyInstructions(to, diffMD);
+            CopyAttributesAndProperties(to, diffMD);
+
         }
 
         public override void Dispose()
         {
             from?.Dispose();
             to?.Dispose();
+        }
+
+        protected override IMetadataTokenProvider Relinker(IMetadataTokenProvider mtp, IGenericParameterProvider context)
+        {
+            //if(mtp is TypeReference ttr && ttr.FullName == "System.Guid")
+            //    Debugger.Break();
+
+            switch (mtp)
+            {
+                case TypeReference tr when diffTypes.TryGetValue(tr.FullName, out var localType):
+                    return localType;
+                case MethodReference mr when diffMethods.TryGetValue(mr.FullName, out var localMethod):
+                    return localMethod;
+                case FieldReference fr when diffFields.TryGetValue(fr.FullName, out var localField):
+                    return localField;
+            }
+
+            return diffMD.ImportReference(mtp);
         }
 
 
