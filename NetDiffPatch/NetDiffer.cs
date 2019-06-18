@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
@@ -31,9 +30,9 @@ namespace NetDiffPatch
         private ModuleDefinition diffMD;
 
         public NetDiffer(ModuleDefinition from,
-                         ModuleDefinition to,
-                         HashSet<string> excludeNamespaces = null,
-                         HashSet<string> excludeTypes = null)
+            ModuleDefinition to,
+            HashSet<string> excludeNamespaces = null,
+            HashSet<string> excludeTypes = null)
         {
             this.from = from;
             this.to = to;
@@ -52,9 +51,8 @@ namespace NetDiffPatch
                 new AssemblyNameDefinition($"{from.Assembly.Name.Name}_diff", new Version(1, 0)),
                 $"{from.Assembly.Name.Name}_diff", ModuleKind.Dll);
 
-
             diffMD = diffDll.MainModule;
-            
+
             // Reference original assembly to resolve stuff we don't import
             diffMD.AssemblyReferences.Add(to.Assembly.Name);
 
@@ -62,29 +60,8 @@ namespace NetDiffPatch
             GenerateTypeDefinitions(to, diffMD);
             CopyInstructions(to, diffMD);
             CopyAttributesAndProperties(to, diffMD);
-            //var diff = diffDll.MainModule;
-
-            //// Reference original assembly to resolve stuff we don't import
-            //diff.AssemblyReferences.Add(to.Assembly.Name);
-
-            //RegisterTypes(diff, typesToInclude);
-            //GenerateTypeDefinitions(to, diff);
-            //CopyInstructions(to, diff);
-            //CopyAttributesAndProperties(to, diff);
-
-            //RunDiff(diffDll);
 
             return diffDll;
-        }
-
-        private void RunDiff(AssemblyDefinition diffDll)
-        {
-            var diffMD = diffDll.MainModule;
-            RegisterTypes(diffMD, typesToInclude);
-            GenerateTypeDefinitions(to, diffMD);
-            CopyInstructions(to, diffMD);
-            CopyAttributesAndProperties(to, diffMD);
-
         }
 
         public override void Dispose()
@@ -93,11 +70,9 @@ namespace NetDiffPatch
             to?.Dispose();
         }
 
-        protected override IMetadataTokenProvider Relinker(IMetadataTokenProvider mtp, IGenericParameterProvider context)
+        protected override IMetadataTokenProvider Relinker(IMetadataTokenProvider mtp,
+            IGenericParameterProvider context)
         {
-            //if(mtp is TypeReference ttr && ttr.FullName == "System.Guid")
-            //    Debugger.Break();
-
             switch (mtp)
             {
                 case TypeReference tr when diffTypes.TryGetValue(tr.FullName, out var localType):
@@ -127,36 +102,6 @@ namespace NetDiffPatch
             return methodsToInclude.TryGetValue(td.FullName, out var result) ? result : new List<MethodDefinition>();
         }
 
-        protected override FieldReference GetOriginalField(FieldReference field,
-                                                           ModuleDefinition fromModule,
-                                                           ModuleDefinition toModule)
-        {
-            return toModule.ImportReference(fromModule.GetType(field.DeclaringType.FullName).Fields
-                                                      .First(f => f.Name == field.Name));
-        }
-
-        protected override MethodReference GetOriginalMethod(MethodReference method,
-                                                             ModuleDefinition fromModule,
-                                                             ModuleDefinition toModule)
-        {
-            return toModule.ImportReference(fromModule.GetType(method.DeclaringType.FullName).Methods
-                                                      .First(m => m.FullName == method.FullName));
-        }
-
-        protected override TypeReference GetOriginalType(TypeReference type,
-                                                         ModuleDefinition fromModule,
-                                                         ModuleDefinition toModule)
-        {
-            return toModule.ImportReference(fromModule.GetType(type.FullName));
-        }
-
-        protected override GenericParameter
-            ResolveGenericParameter(GenericParameter gp, ModuleDefinition fromModule, ModuleDefinition toModule)
-        {
-            return fromModule.GetType(gp.DeclaringType.FullName).GenericParameters
-                             .FirstOrDefault(g => g.Name == gp.Name);
-        }
-
         private void InitDiff(IEnumerable<TypeDefinition> toTypes, TypeDefinition parent = null)
         {
             foreach (var toType in toTypes)
@@ -173,7 +118,9 @@ namespace NetDiffPatch
                     methodsToInclude[toType.FullName] = toType.Methods.ToList();
 
                     if (parent == null)
+                    {
                         typesToInclude.Add(toType);
+                    }
                     else
                     {
                         if (!nestedTypesToInclude.TryGetValue(parent.FullName, out var list))
@@ -224,7 +171,9 @@ namespace NetDiffPatch
                     nestedTypesToInclude.ContainsKey(toType.FullName))
                 {
                     if (parent == null)
+                    {
                         typesToInclude.Add(toType);
+                    }
                     else
                     {
                         if (!nestedTypesToInclude.TryGetValue(toType.FullName, out var list))
@@ -241,11 +190,20 @@ namespace NetDiffPatch
         {
             private readonly Func<T, T, bool> comparer;
 
-            public DelegateComparer(Func<T, T, bool> comparer) { this.comparer = comparer; }
+            public DelegateComparer(Func<T, T, bool> comparer)
+            {
+                this.comparer = comparer;
+            }
 
-            public bool Equals(T x, T y) { return comparer(x, y); }
+            public bool Equals(T x, T y)
+            {
+                return comparer(x, y);
+            }
 
-            public int GetHashCode(T obj) { return obj.GetHashCode(); }
+            public int GetHashCode(T obj)
+            {
+                return obj.GetHashCode();
+            }
         }
     }
 }
